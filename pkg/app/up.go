@@ -116,10 +116,15 @@ var CommandUp = &cli.Command{
 			Usage: "Detach from the container",
 			Value: false,
 		},
-		&cli.BoolFlag{
-			Name:  "no-gpu",
-			Usage: "Launch the CPU container",
-			Value: false,
+		&cli.StringFlag{
+			Name:  "gpu",
+			Usage: "Request GPU resources (number of gpus), such as 1, 2",
+			Value: "",
+		},
+		&cli.StringFlag{
+			Name:  "gpus",
+			Usage: "GPU devices to add to the container, such as `1`, `2`, `all`, `device=0,1` (all to pass all GPUs)",
+			Value: "all",
 		},
 		&cli.BoolFlag{
 			Name:  "force",
@@ -198,18 +203,6 @@ func up(clicontext *cli.Context) error {
 	}
 
 	logrus.Debug("start running the environment")
-	// Do not attach GPU if the flag is set.
-	gpuEnable := clicontext.Bool("no-gpu")
-	var gpu bool
-	if gpuEnable {
-		gpu = false
-	} else {
-		gpu = builder.GPUEnabled()
-	}
-	numGPU := 0
-	if gpu {
-		numGPU = 1
-	}
 
 	opt := envd.Options{
 		Context: c,
@@ -229,7 +222,9 @@ func up(clicontext *cli.Context) error {
 		EnvironmentName: name,
 		BuildContext:    buildOpt.BuildContextDir,
 		Image:           buildOpt.Tag,
-		NumGPU:          numGPU,
+		GpuEnabled:      builder.GPUEnabled(),
+		NumGPU:          clicontext.Int("gpu"),
+		GPUs:            clicontext.String("gpus"),
 		Forced:          clicontext.Bool("force"),
 		Timeout:         clicontext.Duration("timeout"),
 		SshdHost:        clicontext.String("host"),
@@ -240,6 +235,11 @@ func up(clicontext *cli.Context) error {
 	}
 	if len(startOptions.NumCPU) > 0 && len(startOptions.CPUSet) > 0 {
 		return errors.New("`--cpus` and `--cpu-set` are mutually exclusive")
+	}
+
+	if startOptions.NumGPU > 0 && len(startOptions.GPUs) > 0 {
+		return errors.New("`--gpus` and `--gpu` are mutually exclusive")
+
 	}
 
 	if c.Runner != types.RunnerTypeEnvdServer {

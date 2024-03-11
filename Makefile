@@ -136,7 +136,7 @@ addlicense-install:
 build-local:
 	@for target in $(TARGETS); do \
 	  echo "Building $${target} ..."; \
-	  CGO_ENABLED=$(CGO_ENABLED) go build -trimpath -o $(OUTPUT_DIR)/$${target} \
+	  CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=amd64 go build -trimpath -o $(OUTPUT_DIR)/$${target} \
 	    -ldflags "-s -w -X $(ROOT)/pkg/version.version=$(VERSION) \
 		-X $(ROOT)/pkg/version.buildDate=$(BUILD_DATE) \
 		-X $(ROOT)/pkg/version.gitCommit=$(GIT_COMMIT) \

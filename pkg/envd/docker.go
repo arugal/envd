@@ -16,8 +16,10 @@ package envd
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/docker/cli/opts"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -349,7 +351,9 @@ func (e dockerEngine) StartEnvd(ctx context.Context, so StartOptions) (*StartRes
 	logger := logrus.WithFields(logrus.Fields{
 		"tag":           so.Image,
 		"environment":   so.EnvironmentName,
+		"gpuEnabled":    so.GpuEnabled,
 		"gpu":           so.NumGPU,
+		"gpus":          so.GPUs,
 		"shm":           so.ShmSize,
 		"cpu":           so.NumCPU,
 		"cpu-set":       so.CPUSet,
@@ -360,16 +364,6 @@ func (e dockerEngine) StartEnvd(ctx context.Context, so StartOptions) (*StartRes
 	bar := InitProgressBar(5)
 	defer bar.finish()
 	bar.updateTitle("configure the environment")
-
-	if so.NumGPU != 0 {
-		nvruntimeExists, err := e.GPUEnabled(ctx)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to check if nvidia-runtime is installed")
-		}
-		if !nvruntimeExists {
-			return nil, errors.New("GPU is required but nvidia container runtime is not installed, please refer to https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker")
-		}
-	}
 
 	sshPortInHost, err := netutil.GetFreePort()
 	if err != nil {
@@ -540,7 +534,6 @@ func (e dockerEngine) StartEnvd(ctx context.Context, so StartOptions) (*StartRes
 	}
 
 	if len(g.GetExposedPorts()) > 0 {
-
 		for _, item := range g.GetExposedPorts() {
 			var err error
 			if item.HostPort == 0 {
@@ -560,9 +553,24 @@ func (e dockerEngine) StartEnvd(ctx context.Context, so StartOptions) (*StartRes
 		}
 	}
 
-	if so.NumGPU != 0 {
+	gpus := so.GPUs
+	if so.NumGPU > 0 {
+		gpus = strconv.Itoa(so.NumGPU)
+	}
+	hostConfig.DeviceRequests, err = deviceRequests(gpus)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get the gpus")
+	}
+
+	if len(hostConfig.DeviceRequests) > 0 && so.GpuEnabled {
+		nvruntimeExists, err := e.GPUEnabled(ctx)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to check if nvidia-runtime is installed")
+		}
+		if !nvruntimeExists {
+			return nil, errors.New("GPU is required but nvidia container runtime is not installed, please refer to https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker")
+		}
 		logger.Debug("GPU is enabled.")
-		hostConfig.DeviceRequests = deviceRequests(so.NumGPU)
 	}
 
 	config.Labels = e.labels(g, so.EnvironmentName,
@@ -737,23 +745,89 @@ func (e dockerEngine) PruneImage(ctx context.Context) (dockertypes.ImagesPruneRe
 	return pruneReport, nil
 }
 
-func deviceRequests(count int) []container.DeviceRequest {
-	return []container.DeviceRequest{
-		{
-			Driver: "nvidia",
-			Capabilities: [][]string{
-				{"gpu"},
-				{"nvidia"},
-				{"compute"},
-				{"compat32"},
-				{"graphics"},
-				{"utility"},
-				{"video"},
-				{"display"},
-			},
-			Count: count,
-		},
+func parseCount(s string) (int, error) {
+	if s == "all" {
+		return -1, nil
 	}
+	i, err := strconv.Atoi(s)
+	return i, errors.Wrap(err, "count must be an integer")
+}
+
+func deviceRequests(gpus string) ([]container.DeviceRequest, error) {
+	// refer to https://github.com/docker/cli/blob/20923dfbc7fa7e338b6a2ee9df0dd4b713882186/opts/gpus.go#L30-L91
+	csvReader := csv.NewReader(strings.NewReader(gpus))
+	fields, err := csvReader.Read()
+	if err != nil {
+		return nil, err
+	}
+
+	req := container.DeviceRequest{}
+	seen := map[string]struct{}{}
+	// Set writable as the default
+	for _, field := range fields {
+		key, val, withValue := strings.Cut(field, "=")
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("gpu request key '%s' can be specified only once", key)
+		}
+		seen[key] = struct{}{}
+
+		if !withValue {
+			seen["count"] = struct{}{}
+			req.Count, err = parseCount(key)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		switch key {
+		case "driver":
+			req.Driver = val
+		case "count":
+			req.Count, err = parseCount(val)
+			if err != nil {
+				return nil, err
+			}
+		case "device":
+			req.DeviceIDs = strings.Split(val, ",")
+		case "capabilities":
+			req.Capabilities = [][]string{append(strings.Split(val, ","), "gpu")}
+		case "options":
+			r := csv.NewReader(strings.NewReader(val))
+			optFields, err := r.Read()
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to read gpu options")
+			}
+			req.Options = opts.ConvertKVStringsToMap(optFields)
+		default:
+			return nil, fmt.Errorf("unexpected key '%s' in '%s'", key, field)
+		}
+	}
+
+	if _, ok := seen["count"]; !ok && req.DeviceIDs == nil {
+		req.Count = 1
+	}
+	if req.Options == nil {
+		req.Options = make(map[string]string)
+	}
+
+	if req.Driver == "" {
+		req.Driver = "nvidia"
+	}
+	if req.Capabilities == nil {
+		req.Capabilities = [][]string{
+			{"gpu"},
+			{"nvidia"},
+			{"compute"},
+			{"compat32"},
+			{"graphics"},
+			{"utility"},
+			{"video"},
+			{"display"},
+		}
+	}
+
+	return []container.DeviceRequest{req}, nil
 }
 
 func (e dockerEngine) labels(g ir.Graph, name string,
