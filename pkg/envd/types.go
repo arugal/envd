@@ -46,6 +46,7 @@ type StartOptions struct {
 	ShmSize         int
 	Forced          bool
 	SshdHost        string
+	SshdHostPort    int
 
 	EngineSource
 }

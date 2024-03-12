@@ -372,12 +372,18 @@ func (e dockerEngine) StartEnvd(ctx context.Context, so StartOptions) (*StartRes
 		}
 	}
 
-	sshPortInHost, err := netutil.GetFreePort()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get a free port")
+	var sshPortInHost int
+	if so.SshdHostPort > 0 {
+		sshPortInHost = so.SshdHostPort
+	} else {
+		var err error
+		sshPortInHost, err = netutil.GetFreePort()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get a free port")
+		}
 	}
 
-	err = e.CleanEnvdIfExists(ctx, so.EnvironmentName, so.Forced)
+	err := e.CleanEnvdIfExists(ctx, so.EnvironmentName, so.Forced)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to clean the envd environment")
 	}

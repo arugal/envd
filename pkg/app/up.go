@@ -142,6 +142,11 @@ var CommandUp = &cli.Command{
 			Usage: "Assign the host address for the environment SSH access server listening",
 			Value: envd.Localhost,
 		},
+		&cli.IntFlag{
+			Name:  "sshd-host-port",
+			Usage: "Assign the host port for the environment SSH access server listening, the default value is an available port in the host",
+			Value: 0,
+		},
 		// https://github.com/urfave/cli/issues/1134#issuecomment-1191407527
 		&cli.StringFlag{
 			Name:    "export-cache",
@@ -271,6 +276,7 @@ func up(clicontext *cli.Context) error {
 		Forced:          clicontext.Bool("force"),
 		Timeout:         clicontext.Duration("timeout"),
 		SshdHost:        clicontext.String("host"),
+		SshdHostPort:    clicontext.Int("sshd-host-port"),
 		ShmSize:         shmSize,
 		NumCPU:          clicontext.String("cpus"),
 		NumMem:          clicontext.String("memory"),
